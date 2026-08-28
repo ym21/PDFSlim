@@ -298,7 +298,10 @@ def compress(
                             # Pillow buffer before moving to the next resource.
                             image.close()
                         preserve_mask = prepared.size == dimensions
-                        if settings.enable_jpeg_recompression:
+                        # Binary documents must remain lossless. JPEG would
+                        # introduce ringing around glyph edges and create gray
+                        # pixels even though the user selected black/white.
+                        if settings.enable_jpeg_recompression and not _needs_binarization(settings):
                             _write_jpeg(reference, prepared, settings.jpeg_quality, preserve_mask)
                         else:
                             _write_lossless(reference, prepared, preserve_mask)

@@ -111,6 +111,28 @@ def test_jpeg_off_preserves_pixels_and_uses_lossless_transform(tmp_path: Path) -
         assert pikepdf.PdfImage(image).as_pil_image(apply_mask=False).mode == "L"
 
 
+def test_binarization_is_lossless_even_when_jpeg_is_enabled(tmp_path: Path) -> None:
+    source = tmp_path / "scan.pdf"
+    destination = tmp_path / "binary.pdf"
+    _make_image_pdf(source, width=240, height=160)
+    settings = CompressionSettings(
+        target_dpi=None,
+        enable_downsampling=False,
+        enable_jpeg_recompression=True,
+        color_mode="白黒2値",
+        enable_binarization=True,
+    )
+
+    result = compress(source, destination, settings)
+
+    assert result.success, result.error_message
+    with pikepdf.open(destination) as pdf:
+        image = next(iter(pdf.pages[0].get_images().values()))
+        assert str(image["/Filter"]) == "/FlateDecode"
+        pixels = set(pikepdf.PdfImage(image).as_pil_image(apply_mask=False).tobytes())
+        assert pixels <= {0, 255}
+
+
 def test_corrupt_pdf_reports_error_and_leaves_no_output(tmp_path: Path) -> None:
     source = tmp_path / "broken.pdf"
     destination = tmp_path / "broken_compressed.pdf"
