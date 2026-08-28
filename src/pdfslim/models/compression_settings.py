@@ -83,12 +83,10 @@ class CompressionSettings:
         if self.color_mode not in COLOR_MODES:
             raise ValueError(f"unknown color mode: {self.color_mode}")
 
-        # The mode is the beginner-facing setting.  The explicit switches are
-        # retained for the detailed panel and are intentionally additive.
-        if self.color_mode == "グレースケール":
-            self.enable_grayscale = True
-        elif self.color_mode == "白黒2値":
-            self.enable_binarization = True
+        # Color mode is the single source of truth.  Keep legacy fields for
+        # serialized settings, but canonicalize them so they cannot conflict.
+        self.enable_grayscale = self.color_mode == "グレースケール"
+        self.enable_binarization = self.color_mode == "白黒2値"
 
     @classmethod
     def from_preset(cls, name: str) -> "CompressionSettings":

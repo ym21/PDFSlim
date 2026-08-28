@@ -11,6 +11,7 @@ from time import perf_counter
 from typing import Any, Callable
 
 import pikepdf
+import pymupdf
 from PIL import Image, ImageChops, ImageOps
 
 from ..models.compression_result import CompressionResult
@@ -191,6 +192,66 @@ def _friendly_image_error(resource_name: Any, exc: BaseException) -> str:
     return f"画像 {name} を再圧縮できませんでした: {detail}"
 
 
+def _flatten_pages(
+    source: Path,
+    temporary: Path,
+    settings: CompressionSettings,
+    cancel: CancelCallback | None,
+    progress: ProgressCallback | None,
+) -> int:
+    """Render every visible page object into one gray or bitonal image.
+
+    This deliberately changes the PDF structure for the two monochrome modes:
+    text, vector graphics, form XObjects, annotations, and background images
+    all receive the same color conversion, and their original resources are
+    omitted from the rebuilt document.
+    """
+
+    source_document = pymupdf.open(source)
+    output_document = pymupdf.open()
+    try:
+        dpi = settings.target_dpi or 200
+        total = len(source_document)
+        for number, page in enumerate(source_document, 1):
+            if cancel and cancel():
+                raise CompressionCancelled()
+            pixmap = page.get_pixmap(
+                dpi=dpi,
+                colorspace=pymupdf.csGRAY,
+                alpha=False,
+                annots=True,
+            )
+            image = Image.frombytes("L", (pixmap.width, pixmap.height), pixmap.samples)
+            if settings.color_mode == "白黒2値":
+                grayscale_image = image
+                image = grayscale_image.point(lambda value: 255 if value >= 180 else 0, mode="1")
+                grayscale_image.close()
+                image_format = "PNG"
+                save_options: dict[str, Any] = {"optimize": True}
+            elif settings.enable_jpeg_recompression:
+                image_format = "JPEG"
+                save_options = {
+                    "quality": settings.jpeg_quality,
+                    "optimize": True,
+                    "progressive": False,
+                }
+            else:
+                image_format = "PNG"
+                save_options = {"optimize": True}
+            data = io.BytesIO()
+            image.save(data, format=image_format, **save_options)
+            new_page = output_document.new_page(width=page.rect.width, height=page.rect.height)
+            new_page.insert_image(new_page.rect, stream=data.getvalue(), keep_proportion=False)
+            image.close()
+            if progress:
+                progress(number, total)
+        output_document.save(temporary, garbage=4, deflate=True, clean=True)
+        return total
+    finally:
+        source_document.close()
+        output_document.close()
+
+
 def _result(
     source: Path,
     output: Path,
@@ -255,6 +316,33 @@ def compress(
         temporary_file.close()
         temporary_path = Path(temporary_file.name)
 
+        if settings.color_mode in ("グレースケール", "白黒2値"):
+            processed_images = _flatten_pages(
+                source_path,
+                temporary_path,
+                settings,
+                cancel,
+                progress,
+            )
+            if cancel and cancel():
+                raise CompressionCancelled()
+            os.replace(temporary_path, output_path)
+            temporary_path = None
+            compressed_size = output_path.stat().st_size
+            warning_message = None
+            if original_size and compressed_size >= original_size:
+                warning_message = "圧縮後のファイルは元ファイルより小さくなりませんでした。"
+            return _result(
+                source_path,
+                output_path,
+                original_size,
+                compressed_size,
+                perf_counter() - started,
+                True,
+                warning_message=warning_message,
+                images_processed=processed_images,
+            )
+
         with pikepdf.open(source_path) as pdf:
             total_pages = len(pdf.pages)
             seen_images: set[tuple[str, Any]] = set()
@@ -273,6 +361,18 @@ def compress(
                     dimensions = _image_dimensions(reference)
                     if not dimensions or bool(reference.get("/ImageMask", False)):
                         skipped_images += 1
+                        continue
+                    decode = reference.get("/Decode")
+                    unsafe_decode = False
+                    if decode is not None:
+                        try:
+                            values = [float(value) for value in decode]
+                            unsafe_decode = values != [0.0, 1.0] * (len(values) // 2)
+                        except (TypeError, ValueError):
+                            unsafe_decode = True
+                    if unsafe_decode:
+                        skipped_images += 1
+                        warnings.append(f"画像 {resource_name} は非標準のDecode配列のため保持しました。")
                         continue
                     scale = _target_scale(page, resource_name, dimensions, settings)
                     has_transform = (

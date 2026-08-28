@@ -10,3 +10,25 @@ def test_presets_have_expected_ranges() -> None:
     assert small.jpeg_quality < high.jpeg_quality
     assert small.enable_grayscale
     assert small.to_dict()["preset"] == "サイズ優先"
+
+
+def test_color_mode_is_the_only_source_of_truth() -> None:
+    grayscale = CompressionSettings(
+        color_mode="グレースケール",
+        enable_grayscale=False,
+        enable_binarization=True,
+    )
+    binary = CompressionSettings(
+        color_mode="白黒2値",
+        enable_grayscale=True,
+        enable_binarization=False,
+    )
+    color = CompressionSettings(
+        color_mode="カラー維持",
+        enable_grayscale=True,
+        enable_binarization=True,
+    )
+
+    assert (grayscale.enable_grayscale, grayscale.enable_binarization) == (True, False)
+    assert (binary.enable_grayscale, binary.enable_binarization) == (False, True)
+    assert (color.enable_grayscale, color.enable_binarization) == (False, False)

@@ -201,16 +201,12 @@ class MainWindow(QMainWindow):
         detail_layout = QVBoxLayout(detail_box)
         self.downsample_check = QCheckBox("ダウンサンプリング")
         self.jpeg_check = QCheckBox("JPEG再圧縮")
-        self.gray_check = QCheckBox("グレースケール化")
-        self.binary_check = QCheckBox("白黒2値化")
         self.crop_check = QCheckBox("自動余白除去")
         self.optimize_check = QCheckBox("PDF内部最適化")
         self.metadata_check = QCheckBox("メタデータ削除")
         for check in (
             self.downsample_check,
             self.jpeg_check,
-            self.gray_check,
-            self.binary_check,
             self.crop_check,
             self.optimize_check,
             self.metadata_check,
@@ -366,8 +362,6 @@ class MainWindow(QMainWindow):
         self.mode.setCurrentText(settings.color_mode)
         self._set_checkbox(self.downsample_check, settings.enable_downsampling)
         self._set_checkbox(self.jpeg_check, settings.enable_jpeg_recompression)
-        self._set_checkbox(self.gray_check, settings.enable_grayscale)
-        self._set_checkbox(self.binary_check, settings.enable_binarization)
         self._set_checkbox(self.crop_check, settings.enable_auto_crop)
         self._set_checkbox(self.optimize_check, settings.enable_pdf_optimization)
         self._set_checkbox(self.metadata_check, settings.remove_metadata)
@@ -390,8 +384,8 @@ class MainWindow(QMainWindow):
             color_mode=self.mode.currentText(),
             enable_downsampling=self.downsample_check.isChecked(),
             enable_jpeg_recompression=self.jpeg_check.isChecked(),
-            enable_grayscale=self.gray_check.isChecked(),
-            enable_binarization=self.binary_check.isChecked(),
+            enable_grayscale=False,
+            enable_binarization=False,
             enable_auto_crop=self.crop_check.isChecked(),
             enable_pdf_optimization=self.optimize_check.isChecked(),
             remove_metadata=self.metadata_check.isChecked(),
