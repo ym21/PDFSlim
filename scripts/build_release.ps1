@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.1.0"
+    [string]$Version = "0.1.1"
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,17 +15,20 @@ try {
     & $python -m pytest
     if ($LASTEXITCODE -ne 0) { throw "Tests failed." }
 
-    $existingExe = Join-Path $projectRoot "dist\PDFSlim.exe"
-    if (Test-Path -LiteralPath $existingExe) {
-        Remove-Item -LiteralPath $existingExe -Force
+    $existingBundle = Join-Path $projectRoot "dist\PDFSlim"
+    if (Test-Path -LiteralPath $existingBundle) {
+        Remove-Item -LiteralPath $existingBundle -Recurse -Force
     }
     & $python -m PyInstaller `
         --noconfirm `
         --clean `
-        --onefile `
+        --onedir `
+        --contents-directory . `
+        --noupx `
         --windowed `
         --name PDFSlim `
         --paths src `
+        --runtime-hook scripts\pyi_rth_qt_dll_path.py `
         scripts\pyinstaller_entry.py
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed." }
 
@@ -35,7 +38,7 @@ try {
         Remove-Item -LiteralPath $packageDir -Recurse -Force
     }
     New-Item -ItemType Directory -Path $packageDir | Out-Null
-    Copy-Item -LiteralPath "dist\PDFSlim.exe" -Destination $packageDir
+    Copy-Item -Path "dist\PDFSlim\*" -Destination $packageDir -Recurse
     Copy-Item -LiteralPath "LICENSE" -Destination $packageDir
     Copy-Item -LiteralPath "THIRD_PARTY_NOTICES.md" -Destination $packageDir
     Copy-Item -LiteralPath "README.md" -Destination $packageDir
