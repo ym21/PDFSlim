@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdfslim"
+version = "0.1.0"
+description = "Local Windows desktop application for reducing image-heavy PDF size"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "PySide6>=6.6",
+    "pikepdf>=9.0",
+    "Pillow>=10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+pdfslim = "pdfslim.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra"
