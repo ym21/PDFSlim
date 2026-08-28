@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.1.1"
+    [string]$Version = "0.1.2"
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,13 +32,29 @@ try {
         scripts\pyinstaller_entry.py
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed." }
 
+    # Windows searches the application directory before directories registered
+    # by os.add_dll_directory(). Put the exact VC++ runtime shipped with
+    # PySide6 beside the EXE so an older system-wide MSVCP/VCRUNTIME cannot be
+    # selected while QtWidgets is loading.
+    $bundleDir = Join-Path $projectRoot "dist\PDFSlim"
+    # Qt 6 on Windows uses the operating system ICU. The Codex build host also
+    # has Poppler on PATH; PyInstaller can mistakenly collect Poppler's ICU 78
+    # DLLs, which makes QtCore fail with WinError 127 on import. They are not
+    # application dependencies and must not be shipped.
+    Get-ChildItem -LiteralPath $bundleDir -Filter "icu*.dll" -File -ErrorAction SilentlyContinue | ForEach-Object {
+        Remove-Item -LiteralPath $_.FullName -Force
+    }
+    Get-ChildItem -LiteralPath (Join-Path $bundleDir "PySide6") -Filter "*140*.dll" | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $bundleDir -Force
+    }
+
     $packageName = "PDFSlim-v$Version-windows-x64"
     $packageDir = Join-Path $projectRoot "dist\$packageName"
     if (Test-Path -LiteralPath $packageDir) {
         Remove-Item -LiteralPath $packageDir -Recurse -Force
     }
     New-Item -ItemType Directory -Path $packageDir | Out-Null
-    Copy-Item -Path "dist\PDFSlim\*" -Destination $packageDir -Recurse
+    Copy-Item -Path "$bundleDir\*" -Destination $packageDir -Recurse
     Copy-Item -LiteralPath "LICENSE" -Destination $packageDir
     Copy-Item -LiteralPath "THIRD_PARTY_NOTICES.md" -Destination $packageDir
     Copy-Item -LiteralPath "README.md" -Destination $packageDir

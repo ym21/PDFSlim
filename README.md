@@ -47,7 +47,7 @@ python -m pytest
 
 ```powershell
 python -m pip install -e ".[dev,build]"
-.\scripts\build_release.ps1 -Version 0.1.1
+.\scripts\build_release.ps1 -Version 0.1.2
 ```
 
 `dist` にWindows x64用の実行ファイルと必要DLLを含むフォルダ、配布ZIP、SHA-256チェックサムを生成します。配布先ではZIPを完全に展開し、フォルダ内の `PDFSlim.exe` を実行してください。
