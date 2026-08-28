@@ -42,3 +42,16 @@ python -m pytest
 ```
 
 `tests/test_core.py` には Pillow で生成した画像を pikepdf で配置する統合テストが含まれます。pikepdf がない環境では該当テストを自動的にスキップします。
+
+## Windowsバイナリの作成
+
+```powershell
+python -m pip install -e ".[dev,build]"
+.\scripts\build_release.ps1 -Version 0.1.0
+```
+
+`dist` にWindows x64用の単体実行ファイル、配布ZIP、SHA-256チェックサムを生成します。
+
+## ライセンス
+
+PDFSlim本体は [MIT License](LICENSE) で提供します。使用しているPySide6、pikepdf、Pillow、PyMuPDFはそれぞれのライセンスが適用されます。詳細は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) を確認してください。Windowsバイナリを再配布する場合は、実際に同梱したネイティブライブラリと推移依存のライセンス・通知も確認し、必要な文書を保持してください。
