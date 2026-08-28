@@ -37,6 +37,7 @@ def _make_image_pdf(
     *,
     inverted_decode: bool = False,
     mixed_content: bool = False,
+    dark_gradient: bool = False,
 ) -> None:
     from PIL import Image, ImageDraw, ImageOps
 
@@ -53,6 +54,20 @@ def _make_image_pdf(
         drawing.rectangle(
             (width // 8, height * 4 // 5, width * 7 // 8, height * 9 // 10),
             fill=(80, 170, 100),
+        )
+    elif dark_gradient:
+        image = Image.linear_gradient("L").resize((width, height))
+        image = image.point(lambda value: 20 + value * 140 // 255).convert("RGB")
+        drawing = ImageDraw.Draw(image)
+        drawing.rectangle(
+            (width // 8, height // 3, width * 7 // 8, height * 2 // 3),
+            outline=(5, 5, 5),
+            width=max(4, width // 40),
+        )
+        drawing.line(
+            (width // 6, height // 2, width * 5 // 6, height // 2),
+            fill=(0, 0, 0),
+            width=max(3, width // 60),
         )
     stored_image = ImageOps.invert(image) if inverted_decode else image
 
@@ -90,6 +105,29 @@ def _make_image_pdf(
         )
     else:
         page.obj["/Contents"] = pdf.make_stream(b"q 72 0 0 48 0 0 cm /Im0 Do Q")
+    pdf.save(path)
+
+
+def _make_cmyk_pdf(path: Path) -> None:
+    from PIL import Image
+
+    image = Image.new("CMYK", (240, 160), (0, 255, 255, 0))
+    pdf = pikepdf.Pdf.new()
+    page = pdf.add_blank_page(page_size=(72, 48))
+    image_stream = pdf.make_stream(_jpeg_bytes(image))
+    image_stream["/Type"] = pikepdf.Name("/XObject")
+    image_stream["/Subtype"] = pikepdf.Name("/Image")
+    image_stream["/Width"] = image.width
+    image_stream["/Height"] = image.height
+    image_stream["/ColorSpace"] = pikepdf.Name("/DeviceCMYK")
+    image_stream["/BitsPerComponent"] = 8
+    image_stream["/Filter"] = pikepdf.Name("/DCTDecode")
+    image_stream["/Decode"] = pikepdf.Array([0, 1, 0, 1, 0, 1, 0, 1])
+    page.obj["/Resources"] = pikepdf.Dictionary(
+        XObject=pikepdf.Dictionary(Im0=image_stream)
+    )
+    page.obj["/Contents"] = pdf.make_stream(b"q 72 0 0 48 0 0 cm /Im0 Do Q")
+    pdf.docinfo["/Author"] = "Test Author"
     pdf.save(path)
 
 
@@ -193,6 +231,29 @@ def test_binarization_is_lossless_even_when_jpeg_is_enabled(tmp_path: Path) -> N
         assert pixels == {0, 255}
 
 
+def test_adaptive_binarization_does_not_black_out_dark_pages(tmp_path: Path) -> None:
+    source = tmp_path / "dark.pdf"
+    destination = tmp_path / "dark_binary.pdf"
+    _make_image_pdf(source, width=900, height=600, dark_gradient=True)
+
+    result = compress(
+        source,
+        destination,
+        CompressionSettings(
+            target_dpi=150,
+            color_mode="白黒2値",
+            enable_jpeg_recompression=True,
+        ),
+    )
+
+    assert result.success, result.error_message
+    with pikepdf.open(destination) as pdf:
+        image = next(iter(pdf.pages[0].get_images().values()))
+        samples = pikepdf.PdfImage(image).as_pil_image(apply_mask=False).convert("L").tobytes()
+    black_ratio = samples.count(0) / len(samples)
+    assert 0.005 < black_ratio < 0.6
+
+
 def document_text(path: Path) -> str:
     with pymupdf.open(path) as document:
         return "".join(page.get_text() for page in document)
@@ -218,6 +279,44 @@ def test_non_identity_decode_image_is_preserved_without_inversion(tmp_path: Path
     with pikepdf.open(destination) as pdf:
         image = next(iter(pdf.pages[0].get_images().values()))
         assert list(image["/Decode"]) == [1, 0, 1, 0, 1, 0]
+
+
+def test_cmyk_jpeg_uses_safe_rgb_rewrite_and_preserves_metadata(tmp_path: Path) -> None:
+    source = tmp_path / "cmyk.pdf"
+    destination = tmp_path / "cmyk_compressed.pdf"
+    without_metadata = tmp_path / "cmyk_private.pdf"
+    _make_cmyk_pdf(source)
+    before = _render_rgb(source)
+    settings = CompressionSettings(
+        target_dpi=96,
+        jpeg_quality=85,
+        color_mode="カラー維持",
+        enable_downsampling=True,
+        enable_jpeg_recompression=True,
+    )
+
+    result = compress(source, destination, settings)
+
+    assert result.success, result.error_message
+    assert result.warning_message and "CMYK" in result.warning_message
+    after = _render_rgb(destination)
+    assert sum(abs(left - right) for left, right in zip(before, after)) / len(before) < 5
+    with pikepdf.open(destination) as pdf:
+        page = pdf.pages[0]
+        assert len(page.get_images()) == 1
+        assert str(pdf.docinfo.get("/Author")) == "Test Author"
+
+    private_settings = CompressionSettings(
+        target_dpi=96,
+        jpeg_quality=85,
+        color_mode="カラー維持",
+        enable_jpeg_recompression=True,
+        remove_metadata=True,
+    )
+    private_result = compress(source, without_metadata, private_settings)
+    assert private_result.success, private_result.error_message
+    with pikepdf.open(without_metadata) as pdf:
+        assert "/Author" not in pdf.docinfo
 
 
 def test_corrupt_pdf_reports_error_and_leaves_no_output(tmp_path: Path) -> None:

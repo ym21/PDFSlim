@@ -187,6 +187,7 @@ class MainWindow(QMainWindow):
         self.quality = QSlider(Qt.Orientation.Horizontal)
         self.quality.setRange(1, 100)
         self.quality.valueChanged.connect(self._update_quality_label)
+        self.quality.setToolTip("値を下げるほど小さくなりますが、写真・文字・細線の周囲に圧縮ノイズが出やすくなります。")
         self.quality_label = QLabel()
         quality_row.addWidget(self.quality, 1)
         quality_row.addWidget(self.quality_label)
@@ -194,6 +195,7 @@ class MainWindow(QMainWindow):
 
         self.mode = QComboBox()
         self.mode.addItems(list(COLOR_MODES))
+        self.mode.setToolTip("3つから1つだけ選択します。グレースケール／白黒2値ではページ全体を画像化します。")
         basic.addRow("カラーモード", self.mode)
         settings_layout.addLayout(basic)
 
@@ -202,13 +204,15 @@ class MainWindow(QMainWindow):
         self.downsample_check = QCheckBox("ダウンサンプリング")
         self.jpeg_check = QCheckBox("JPEG再圧縮")
         self.crop_check = QCheckBox("自動余白除去")
-        self.optimize_check = QCheckBox("PDF内部最適化")
-        self.metadata_check = QCheckBox("メタデータ削除")
+        self.metadata_check = QCheckBox("文書情報（作者・作成ソフト・日時）を削除")
+        self.downsample_check.setToolTip("指定DPIを超える画像だけ縮小します。小さい画像は拡大しません。低くすると小さくなりますが細部が失われます。")
+        self.jpeg_check.setToolTip("画像をJPEGで再圧縮します。品質を下げるほど小さくなりますが、文字や細線にブロックノイズが出ます。複雑なCMYK画像は色反転を防ぐ安全なRGB変換を使います。")
+        self.crop_check.setToolTip("画像内の白に近い外周を切り取り、元の配置枠へ合わせ直します。拡大や縦横比が変わる場合があります。")
+        self.metadata_check.setToolTip("作者・作成ソフト・日時などを削除し、共有時のプライバシーを守ります。容量削減効果は通常ごくわずかです。")
         for check in (
             self.downsample_check,
             self.jpeg_check,
             self.crop_check,
-            self.optimize_check,
             self.metadata_check,
         ):
             detail_layout.addWidget(check)
@@ -363,7 +367,6 @@ class MainWindow(QMainWindow):
         self._set_checkbox(self.downsample_check, settings.enable_downsampling)
         self._set_checkbox(self.jpeg_check, settings.enable_jpeg_recompression)
         self._set_checkbox(self.crop_check, settings.enable_auto_crop)
-        self._set_checkbox(self.optimize_check, settings.enable_pdf_optimization)
         self._set_checkbox(self.metadata_check, settings.remove_metadata)
 
     def _dpi_value(self) -> int | None:
@@ -387,7 +390,6 @@ class MainWindow(QMainWindow):
             enable_grayscale=False,
             enable_binarization=False,
             enable_auto_crop=self.crop_check.isChecked(),
-            enable_pdf_optimization=self.optimize_check.isChecked(),
             remove_metadata=self.metadata_check.isChecked(),
         )
 

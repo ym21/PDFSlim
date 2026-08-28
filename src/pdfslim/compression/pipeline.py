@@ -12,7 +12,7 @@ from typing import Any, Callable
 
 import pikepdf
 import pymupdf
-from PIL import Image, ImageChops, ImageOps
+from PIL import Image, ImageChops, ImageFilter, ImageOps
 
 from ..models.compression_result import CompressionResult
 from ..models.compression_settings import CompressionSettings
@@ -131,7 +131,18 @@ def _prepare_image(
             prepared = prepared.resize(target_size, Image.Resampling.LANCZOS)
 
     if _needs_binarization(settings):
-        prepared = ImageOps.grayscale(prepared).point(lambda value: 255 if value >= 180 else 0)
+        gray = ImageOps.grayscale(prepared)
+        # Local background thresholding avoids turning photographs and shaded
+        # scans into a nearly solid black page.
+        background = gray.filter(ImageFilter.BoxBlur(9))
+        contrast = ImageChops.subtract(gray, background, scale=1, offset=128)
+        # Require a meaningful local darkening instead of classifying every
+        # below-average photo pixel as black. This keeps text while reducing
+        # solid/noisy black regions in photographs and shaded backgrounds.
+        prepared = contrast.point(lambda value: 255 if value >= 116 else 0, mode="1")
+        gray.close()
+        background.close()
+        contrast.close()
     elif _needs_grayscale(settings):
         prepared = ImageOps.grayscale(prepared)
     else:
@@ -192,6 +203,110 @@ def _friendly_image_error(resource_name: Any, exc: BaseException) -> str:
     return f"画像 {name} を再圧縮できませんでした: {detail}"
 
 
+def _has_complex_color_images(source: Path) -> bool:
+    """Return whether CMYK or palette images need the MuPDF rewrite path."""
+
+    complex_spaces = ("DeviceCMYK", "Indexed", "ICCBased", "Separation", "DeviceN")
+    with pikepdf.open(source) as pdf:
+        for page in pdf.pages:
+            for reference in page.get_images().values():
+                if any(name in str(reference.get("/ColorSpace", "")) for name in complex_spaces):
+                    return True
+    return False
+
+
+def _rewrite_complex_color_images(
+    source: Path,
+    temporary: Path,
+    settings: CompressionSettings,
+    cancel: CancelCallback | None,
+    progress: ProgressCallback | None,
+) -> tuple[int, int, list[str]]:
+    """Safely replace CMYK and other complex images while retaining page structure.
+
+    MuPDF performs the color conversion before Pillow encodes the replacement
+    JPEG. This avoids the inverted-CMYK convention mismatch that can otherwise
+    produce a photographic negative. Text, vectors, links and page resources
+    remain PDF objects instead of being flattened into a page-sized bitmap.
+    """
+
+    render_document = pymupdf.open(source)
+    processed = 0
+    skipped = 0
+    warnings: list[str] = []
+    try:
+        with pikepdf.open(source) as pdf:
+            seen: set[tuple[str, Any]] = set()
+            total_pages = len(pdf.pages)
+            for page_number, page in enumerate(pdf.pages, start=1):
+                if cancel and cancel():
+                    raise CompressionCancelled()
+                for resource_name, reference in page.get_images().items():
+                    key = _object_key(reference)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    dimensions = _image_dimensions(reference)
+                    if not dimensions or bool(reference.get("/ImageMask", False)):
+                        skipped += 1
+                        continue
+                    decode = reference.get("/Decode")
+                    if decode is not None:
+                        try:
+                            values = [float(value) for value in decode]
+                            unsafe_decode = values != [0.0, 1.0] * (len(values) // 2)
+                        except (TypeError, ValueError):
+                            unsafe_decode = True
+                        if unsafe_decode:
+                            skipped += 1
+                            warnings.append(f"画像 {resource_name} は非標準のDecode配列のため保持しました。")
+                            continue
+                    try:
+                        xref = int(reference.objgen[0])
+                        pixmap = pymupdf.Pixmap(render_document, xref)
+                        if pixmap.alpha:
+                            pixmap = pymupdf.Pixmap(pixmap, 0)
+                        if pixmap.colorspace and pixmap.colorspace.n > 3:
+                            pixmap = pymupdf.Pixmap(pymupdf.csRGB, pixmap)
+                        mode = "L" if pixmap.colorspace and pixmap.colorspace.n == 1 else "RGB"
+                        image = Image.frombytes(mode, (pixmap.width, pixmap.height), pixmap.samples)
+                        try:
+                            scale = _target_scale(page, resource_name, dimensions, settings)
+                            prepared = _prepare_image(image, dimensions, scale, settings)
+                        finally:
+                            image.close()
+                        try:
+                            _write_jpeg(
+                                reference,
+                                prepared,
+                                settings.jpeg_quality,
+                                preserve_mask=prepared.size == dimensions,
+                            )
+                            processed += 1
+                        finally:
+                            prepared.close()
+                    except Exception as exc:
+                        skipped += 1
+                        warnings.append(_friendly_image_error(resource_name, exc))
+                if progress:
+                    progress(page_number, total_pages)
+
+            if settings.remove_metadata:
+                for key in list(pdf.docinfo.keys()):
+                    del pdf.docinfo[key]
+                root = getattr(pdf, "Root", None)
+                if root is not None and "/Metadata" in root:
+                    del root["/Metadata"]
+            pdf.save(
+                temporary,
+                compress_streams=True,
+                object_stream_mode=pikepdf.ObjectStreamMode.generate,
+            )
+        return processed, skipped, warnings
+    finally:
+        render_document.close()
+
+
 def _flatten_pages(
     source: Path,
     temporary: Path,
@@ -223,9 +338,15 @@ def _flatten_pages(
             )
             image = Image.frombytes("L", (pixmap.width, pixmap.height), pixmap.samples)
             if settings.color_mode == "白黒2値":
-                grayscale_image = image
-                image = grayscale_image.point(lambda value: 255 if value >= 180 else 0, mode="1")
+                rendered_image = image
+                grayscale_image = ImageOps.grayscale(rendered_image)
+                rendered_image.close()
+                background = grayscale_image.filter(ImageFilter.BoxBlur(9))
+                contrast = ImageChops.subtract(grayscale_image, background, scale=1, offset=128)
+                image = contrast.point(lambda value: 255 if value >= 116 else 0, mode="1")
                 grayscale_image.close()
+                background.close()
+                contrast.close()
                 image_format = "PNG"
                 save_options: dict[str, Any] = {"optimize": True}
             elif settings.enable_jpeg_recompression:
@@ -245,6 +366,24 @@ def _flatten_pages(
             image.close()
             if progress:
                 progress(number, total)
+        if not settings.remove_metadata:
+            metadata_keys = {
+                "title",
+                "author",
+                "subject",
+                "keywords",
+                "creator",
+                "producer",
+                "creationDate",
+                "modDate",
+                "trapped",
+            }
+            metadata = {
+                key: value
+                for key, value in source_document.metadata.items()
+                if key in metadata_keys and value is not None
+            }
+            output_document.set_metadata(metadata)
         output_document.save(temporary, garbage=4, deflate=True, clean=True)
         return total
     finally:
@@ -316,6 +455,40 @@ def compress(
         temporary_file.close()
         temporary_path = Path(temporary_file.name)
 
+        safe_complex_rewrite = (
+            settings.color_mode == "カラー維持"
+            and settings.enable_jpeg_recompression
+            and _has_complex_color_images(source_path)
+        )
+        if safe_complex_rewrite:
+            processed_images, skipped_images, rewrite_warnings = _rewrite_complex_color_images(
+                source_path,
+                temporary_path,
+                settings,
+                cancel,
+                progress,
+            )
+            warnings.extend(rewrite_warnings)
+            warnings.append("CMYKなどの画像は、色反転を防ぐ安全なRGB変換で再圧縮しました。")
+            if cancel and cancel():
+                raise CompressionCancelled()
+            os.replace(temporary_path, output_path)
+            temporary_path = None
+            compressed_size = output_path.stat().st_size
+            if original_size and compressed_size >= original_size:
+                warnings.append("圧縮後のファイルは元ファイルより小さくなりませんでした。")
+            return _result(
+                source_path,
+                output_path,
+                original_size,
+                compressed_size,
+                perf_counter() - started,
+                True,
+                warning_message="\n".join(warnings),
+                images_processed=processed_images,
+                images_skipped=skipped_images,
+            )
+
         if settings.color_mode in ("グレースケール", "白黒2値"):
             processed_images = _flatten_pages(
                 source_path,
@@ -329,9 +502,9 @@ def compress(
             os.replace(temporary_path, output_path)
             temporary_path = None
             compressed_size = output_path.stat().st_size
-            warning_message = None
             if original_size and compressed_size >= original_size:
-                warning_message = "圧縮後のファイルは元ファイルより小さくなりませんでした。"
+                warnings.append("圧縮後のファイルは元ファイルより小さくなりませんでした。")
+            warning_message = "\n".join(warnings) if warnings else None
             return _result(
                 source_path,
                 output_path,
@@ -414,10 +587,8 @@ def compress(
                     progress(page_number, total_pages)
 
             if settings.remove_metadata:
-                try:
-                    pdf.docinfo.clear()
-                except (AttributeError, KeyError):
-                    pass
+                for key in list(pdf.docinfo.keys()):
+                    del pdf.docinfo[key]
                 root = getattr(pdf, "Root", None)
                 if root is not None and "/Metadata" in root:
                     del root["/Metadata"]
@@ -425,7 +596,7 @@ def compress(
             # pikepdf/qpdf rewrites the document and removes unreachable
             # objects as part of save.  Linearization is optional because it
             # can increase size for small files.
-            pdf.save(temporary_path, linearize=settings.enable_pdf_optimization)
+            pdf.save(temporary_path, compress_streams=True, object_stream_mode=pikepdf.ObjectStreamMode.generate)
 
         if cancel and cancel():
             raise CompressionCancelled()

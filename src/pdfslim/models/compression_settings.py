@@ -18,7 +18,6 @@ PRESETS = {
         enable_grayscale=False,
         enable_binarization=False,
         enable_auto_crop=False,
-        enable_pdf_optimization=True,
         remove_metadata=False,
     ),
     "バランス": dict(
@@ -30,7 +29,6 @@ PRESETS = {
         enable_grayscale=False,
         enable_binarization=False,
         enable_auto_crop=False,
-        enable_pdf_optimization=True,
         remove_metadata=False,
     ),
     "サイズ優先": dict(
@@ -42,7 +40,6 @@ PRESETS = {
         enable_grayscale=True,
         enable_binarization=False,
         enable_auto_crop=False,
-        enable_pdf_optimization=True,
         remove_metadata=False,
     ),
     "文書": dict(
@@ -54,7 +51,6 @@ PRESETS = {
         enable_grayscale=True,
         enable_binarization=False,
         enable_auto_crop=False,
-        enable_pdf_optimization=True,
         remove_metadata=False,
     ),
 }
@@ -71,7 +67,6 @@ class CompressionSettings:
     enable_grayscale: bool = False
     enable_binarization: bool = False
     enable_auto_crop: bool = False
-    enable_pdf_optimization: bool = True
     remove_metadata: bool = False
 
     def __post_init__(self) -> None:

@@ -10,6 +10,7 @@ def test_presets_have_expected_ranges() -> None:
     assert small.jpeg_quality < high.jpeg_quality
     assert small.enable_grayscale
     assert small.to_dict()["preset"] == "サイズ優先"
+    assert "enable_pdf_optimization" not in small.to_dict()
 
 
 def test_color_mode_is_the_only_source_of_truth() -> None:
